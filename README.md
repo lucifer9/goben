@@ -62,11 +62,14 @@ Make sure ~/go/bin is in your shell PATH.
 
 Start server:
 
-    server$ goben
+    server$ goben ;# use all defaults
+    server$ goben -listeners @testsock ;# use abstract unix domain socket, linux only
 
 Start client:
 
     client$ goben -hosts 1.1.1.1 ;# 1.1.1.1 is server's address
+    client$ goben -uds ;# run unix domain socket test using all defaults
+    client$ goben -uds -hosts @testsock ;# run abstract unix domain socket, linux only
 
 # Command-line Options
 
@@ -118,6 +121,8 @@ Usage of goben:
         unspecified time unit defaults to second (default "10s")
   -udp
         run client in UDP mode
+  -uds
+        use unix domain socket
   -writeSize int
         write buffer size in bytes (default 50000)
 ```
