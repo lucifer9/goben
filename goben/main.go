@@ -33,6 +33,7 @@ type config struct {
 	tlsKey         string
 	tls            bool
 	localAddr      string
+	uds            bool
 }
 
 func (h *hostList) String() string {
@@ -64,7 +65,7 @@ func main() {
 
 	flag.Var(&app.hosts, "hosts", "comma-separated list of hosts\nyou may append an optional port to every host: host[:port]")
 	flag.Var(&app.listeners, "listeners", "comma-separated list of listen addresses\nyou may prepend an optional host to every port: [host]:port")
-	flag.StringVar(&app.defaultPort, "defaultPort", ":8080", "default port")
+	flag.StringVar(&app.defaultPort, "defaultPort", ":9099", "default port")
 	flag.IntVar(&app.connections, "connections", 1, "number of parallel connections")
 	flag.StringVar(&app.reportInterval, "reportInterval", "2s", "periodic report interval\nunspecified time unit defaults to second")
 	flag.StringVar(&app.totalDuration, "totalDuration", "10s", "test total duration\nunspecified time unit defaults to second")
@@ -82,6 +83,7 @@ func main() {
 	flag.StringVar(&app.tlsCert, "cert", "cert.pem", "TLS cert file")
 	flag.BoolVar(&app.tls, "tls", true, "set to false to disable TLS")
 	flag.StringVar(&app.localAddr, "localAddr", "", "bind specific local address:port\nexample: -localAddr 127.0.0.1:2000")
+	flag.BoolVar(&app.uds, "uds", false, "use unix domain socket")
 
 	flag.Parse()
 
@@ -121,7 +123,7 @@ func main() {
 		app.connections, app.defaultPort, app.listeners, app.hosts)
 	log.Printf("reportInterval=%s totalDuration=%s", app.opt.ReportInterval, app.opt.TotalDuration)
 
-	if len(app.hosts) == 0 {
+	if len(app.hosts) == 0 && !app.uds {
 		log.Printf("server mode (use -hosts to switch to client mode)")
 		serve(&app)
 		return
@@ -130,6 +132,8 @@ func main() {
 	var proto string
 	if app.udp {
 		proto = "udp"
+	} else if app.uds {
+		proto = "unix"
 	} else {
 		proto = "tcp"
 	}

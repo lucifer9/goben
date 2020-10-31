@@ -20,6 +20,8 @@ func open(app *config) {
 	var proto string
 	if app.udp {
 		proto = "udp"
+	} else if app.uds {
+		proto = "unix"
 	} else {
 		proto = "tcp"
 	}
@@ -38,6 +40,12 @@ func open(app *config) {
 				log.Printf("open: resolve %s localAddr=%s: %v", proto, app.localAddr, err)
 			}
 			dialer.LocalAddr = addr
+		} else if app.uds {
+			addr, err := net.ResolveUnixAddr(proto, app.localAddr)
+			if err != nil {
+				log.Printf("open: resolve %s localAddr=%s: %v", proto, app.localAddr, err)
+			}
+			dialer.LocalAddr = addr
 		} else {
 			addr, err := net.ResolveTCPAddr(proto, app.localAddr)
 			if err != nil {
@@ -47,16 +55,21 @@ func open(app *config) {
 		}
 		log.Printf("open: localAddr: %s", dialer.LocalAddr)
 	}
-
+	if app.uds && len(app.hosts) == 0 {
+		app.hosts = append(app.hosts, "/tmp/test.sock")
+	}
 	for _, h := range app.hosts {
 
-		hh := appendPortIfMissing(h, app.defaultPort)
-
+		var hh string
+		if app.uds {
+			hh = fixUnixPath(h)
+		} else {
+			hh = appendPortIfMissing(h, app.defaultPort)
+		}
 		for i := 0; i < app.connections; i++ {
 
 			log.Printf("open: opening TLS=%v %s %d/%d: %s", app.tls, proto, i, app.connections, hh)
-
-			if !app.udp && app.tls {
+			if !app.udp && !app.uds && app.tls {
 				// try TLS first
 				log.Printf("open: trying TLS")
 				conn, errDialTLS := tlsDial(dialer, proto, hh)
@@ -67,16 +80,27 @@ func open(app *config) {
 				log.Printf("open: trying TLS: failure: %s: %s: %v", proto, hh, errDialTLS)
 			}
 
-			if !app.udp {
+			if !app.udp && !app.uds {
 				log.Printf("open: trying non-TLS TCP")
-			}
 
-			conn, errDial := dialer.Dial(proto, hh)
-			if errDial != nil {
-				log.Printf("open: dial %s: %s: %v", proto, hh, errDial)
-				continue
+				conn, errDial := dialer.Dial(proto, hh)
+				if errDial != nil {
+					log.Printf("open: dial %s: %s: %v", proto, hh, errDial)
+					continue
+				}
+
+				spawnClient(app, &wg, conn, i, app.connections, false, &aggReader, &aggWriter)
+			} else if !app.udp {
+				log.Printf("open: trying non-TLS Unix")
+
+				conn, errDial := dialer.Dial(proto, hh)
+				if errDial != nil {
+					log.Printf("open: dial %s: %s: %v", proto, hh, errDial)
+					continue
+				}
+
+				spawnClient(app, &wg, conn, i, app.connections, false, &aggReader, &aggWriter)
 			}
-			spawnClient(app, &wg, conn, i, app.connections, false, &aggReader, &aggWriter)
 		}
 	}
 
@@ -120,6 +144,12 @@ func sendOptions(app *config, conn io.Writer) error {
 		if optWriteErr != nil {
 			log.Printf("handleConnectionClient: UDP options write: %v", optWriteErr)
 			return optWriteErr
+		}
+	} else if app.uds {
+		enc := gob.NewEncoder(conn)
+		if errOpt := enc.Encode(&opt); errOpt != nil {
+			log.Printf("handleConnectionClient: Unix options failure: %v", errOpt)
+			return errOpt
 		}
 	} else {
 		enc := gob.NewEncoder(conn)

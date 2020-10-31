@@ -8,7 +8,9 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -30,16 +32,60 @@ func serve(app *config) {
 		hh := appendPortIfMissing(h, app.defaultPort)
 		listenTCP(app, &wg, hh)
 		listenUDP(app, &wg, hh)
+		hh = fixUnixPath(h)
+		listenUnix(app, &wg, hh)
 	}
-
 	wg.Wait()
 }
 
+func fixUnixPath(path string) string {
+	if path == ":9099" {
+		return "/tmp/test.sock"
+	}
+	return path
+}
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
 
+func listenUnix(app *config, wg *sync.WaitGroup, h string) {
+	log.Printf("listenUnix: TLS=%v spawning Unix listener: %s", app.tls, h)
+
+	// first try TLS
+	// if app.tls {
+	// 	listener, errTLS := listenTLS(app, h)
+	// 	if errTLS == nil {
+	// 		spawnAcceptLoopTCP(app, wg, listener, true)
+	// 		return
+	// 	}
+	// 	log.Printf("listenTLS: %v", errTLS)
+	// 	// TLS failed, try plain TCP
+	// }
+
+	listener, errListen := net.Listen("unix", h)
+	if errListen != nil {
+		log.Printf("listenUnix: TLS=%v %s: %v", app.tls, h, errListen)
+		return
+	}
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, os.Interrupt, os.Kill, syscall.SIGTERM)
+	go func(c chan os.Signal) {
+		// Wait for a SIGINT or SIGKILL:
+		sig := <-c
+		log.Printf("Caught signal %s: shutting down.", sig)
+		// Stop listening (and unlink the socket if unix type):
+		listener.Close()
+		// And we're done:
+		os.Exit(0)
+	}(sigc)
+
+	spawnAcceptLoopUnix(app, wg, listener, false)
+}
+func spawnAcceptLoopUnix(app *config, wg *sync.WaitGroup, listener net.Listener, isTLS bool) {
+	wg.Add(1)
+	go handleUnix(app, wg, listener, isTLS)
+}
 func listenTCP(app *config, wg *sync.WaitGroup, h string) {
 	log.Printf("listenTCP: TLS=%v spawning TCP listener: %s", app.tls, h)
 
@@ -100,7 +146,9 @@ func listenUDP(app *config, wg *sync.WaitGroup, h string) {
 }
 
 func appendPortIfMissing(host, port string) string {
-
+	if host[0] == '/' || host[0] == '@' {
+		return "127.0.0.1" + port
+	}
 LOOP:
 	for i := len(host) - 1; i >= 0; i-- {
 		c := host[i]
@@ -123,6 +171,23 @@ LOOP:
 func handleTCP(app *config, wg *sync.WaitGroup, listener net.Listener, isTLS bool) {
 	defer wg.Done()
 
+	var id int
+
+	var aggReader aggregate
+	var aggWriter aggregate
+
+	for {
+		conn, errAccept := listener.Accept()
+		if errAccept != nil {
+			log.Printf("handle: accept: %v", errAccept)
+			break
+		}
+		go handleConnection(conn, id, 0, isTLS, &aggReader, &aggWriter)
+		id++
+	}
+}
+func handleUnix(app *config, wg *sync.WaitGroup, listener net.Listener, isTLS bool) {
+	defer wg.Done()
 	var id int
 
 	var aggReader aggregate
